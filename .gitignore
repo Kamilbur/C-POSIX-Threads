@@ -1,3 +1,6 @@
+# Own ignores
+out
+
 # Prerequisites
 *.d
 
