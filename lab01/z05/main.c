@@ -71,7 +71,7 @@ pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 int buffers_read_max[] = {2, 3, 2};
 const int buffers_num = SIZEOF_ARR(buffers_read_max);
 pthread_mutex_t mutexesCountUpdate[SIZEOF_ARR(buffers_read_max)];
-pthread_mutex_t mutexesWriters[SIZEOF_ARR(buffers_read_max)];
+sem_t semaphoreWriters[SIZEOF_ARR(buffers_read_max)];
 sem_t semaphoreReaders[SIZEOF_ARR(buffers_read_max)];
 
 int Writer(void *data);
@@ -87,7 +87,7 @@ main(int argc, char *argv[])
 
     for (int ii = 0; ii < buffers_num; ii++) {
         pthread_mutex_init(mutexesCountUpdate + ii, NULL);
-        pthread_mutex_init(mutexesWriters + ii, NULL);
+        sem_init(semaphoreWriters + ii, 0, 1);
         sem_init(semaphoreReaders + ii, 0, buffers_read_max[ii]);
     }
 
@@ -151,10 +151,6 @@ Reader(void *data)
     for (int ii = 0; ii < READER_TURNS; ii++) {
         for (;;) {
             buffer_idx = rand() % buffers_num;
-
-            print("(R) Reader %d trying to lock mutexCU[%d]\n", threadId, buffer_idx);
-            MUTEX_LOCK(result, mutexesCountUpdate[buffer_idx]);
-            print("(R) Reader %d locked mutexCU[%d]\n", threadId, buffer_idx);
             if ( sem_trywait(semaphoreReaders + buffer_idx) ) {
                 if (errno != EAGAIN) {
                     err(EXIT_FAILURE,
@@ -164,8 +160,19 @@ Reader(void *data)
             }
             else {
                 dprint("(R) Reader %d succeded in decrementing semaphoreReaders[%d]\n", threadId, buffer_idx);
+                MUTEX_LOCK(result, mutexesCountUpdate[buffer_idx]);
+                if ( sem_getvalue(semaphoreReaders + buffer_idx, &result) ) {
+                    err(EXIT_FAILURE,
+                    "Error geting value from semaphore. Line[%d]",
+                    __LINE__);
+                }
+                print("(R) Reader %d SR[%d]=%d/%d\n", threadId, buffer_idx, result, buffers_read_max[buffer_idx]);
+                if (result == buffers_read_max[buffer_idx] - 1) {
+                    print("(R) Reader %d decrement SW[%d]\n", threadId, buffer_idx);
+                    SEM_WAIT(semaphoreWriters[buffer_idx]);
+                }
                 MUTEX_UNLOCK(result, mutexesCountUpdate[buffer_idx]);
-                print("(R) Reader %d unlocked mutexCU[%d]\n", threadId, buffer_idx);
+//                print("(R) Reader %d unlocked mutexCU[%d]\n", threadId, buffer_idx);
                 break;
             }
         }
@@ -179,7 +186,18 @@ Reader(void *data)
 	    print("(R) Reader %d finished reading from object[%d]\n", threadId, buffer_idx);
             
 	    // Unlock the semaphore object.
+
+        MUTEX_LOCK(result, mutexesCountUpdate[buffer_idx]);
 	    SEM_POST(semaphoreReaders[buffer_idx]);
+        if ( sem_getvalue(semaphoreReaders + buffer_idx, &result) ) {
+            err(EXIT_FAILURE,
+            "Error geting value from semaphore. Line[%d]",
+            __LINE__);
+        }
+        if (result == buffers_read_max[buffer_idx]) {
+            SEM_POST(semaphoreWriters[buffer_idx]);
+        }
+        MUTEX_UNLOCK(result, mutexesCountUpdate[buffer_idx]);
         dprint("(R) Reader %d incremented semaphoreReaders[%d]\n", threadId, buffer_idx);
 
         usleep(GetRandomTime(800));
