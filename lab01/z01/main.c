@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+//#define DEBUG
+
 #define READERS_COUNT 5
 #define WRITERS_COUNT 5
 #define READER_TURNS 5
@@ -30,6 +32,21 @@
         __LINE__);                                  \
     }                                               \
 } while (0)
+
+#define print(...) do {     \
+    printf(__VA_ARGS__);    \
+    fflush(stdout);         \
+} while (0)
+
+
+#ifdef DEBUG
+# define dprint(...) do {       \
+    print(__VA_ARGS__);         \
+} while (0)
+#else
+# define dprint(msg, ...) do {  \
+} while (0)
+#endif
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t readCountUpdate = PTHREAD_MUTEX_INITIALIZER;
@@ -104,31 +121,39 @@ Reader(void *data)
     int result;
     
     for (int ii = 0; ii < READER_TURNS; ii++) {
+        dprint("(R) Reader %d trying to lock readerCountUpdate\n", threadId);
         MUTEX_LOCK(result, readCountUpdate);
+        dprint("(R) Reader %d obtained readerCountUpdate\n", threadId);
+
         readCount++;
 
         if (readCount == 1) {
+            dprint("(R) Reader %d trying to lock mutex\n", threadId);
             MUTEX_LOCK(result, mutex);
+            dprint("(R) Reader %d obtained mutex\n", threadId);
         }
 
         MUTEX_UNLOCK(result, readCountUpdate);
+        dprint("(R) Reader %d unlocked readCountUpdate\n", threadId);
 
-        printf("(R) Reader %d started reading... now reading %d reader(s)\n", threadId, readCount);
-	    fflush(stdout);
+        print("(R) Reader %d started reading... now reading %d reader(s)\n", threadId, readCount);
 
         // Read, read, read
 	    usleep(GetRandomTime(200));
 
+        dprint("(R) Reader %d trying to lock readCountUpdate\n", threadId);
         MUTEX_LOCK(result, readCountUpdate);
+        dprint("(R) Reader %d obtained readCountUpdate\n", threadId);
         readCount--;
         if (readCount == 0) {
             MUTEX_UNLOCK(result, mutex);
+            dprint("(R) Reader %d unlocked mutex\n", threadId);
         }
 
-	    printf("(R) Reader %d finished, now reading %d reader(s)\n", threadId, readCount);
-        fflush(stdout);
+	    print("(R) Reader %d finished, now reading %d reader(s)\n", threadId, readCount);
 
         MUTEX_UNLOCK(result, readCountUpdate);
+        dprint("(R) Reader %d unlocked readCountUpdate\n", threadId);
 
         usleep(GetRandomTime(800));
     }
@@ -145,23 +170,26 @@ Writer(void *data)
     int result;
 
     for (int ii = 0; ii < WRITER_TURNS; ii++) {
+        dprint("(W) Writer %d trying to lock mutex\n", threadId);
         MUTEX_LOCK(result, mutex);
+        dprint("(W) Writer %d obtained mutex\n", threadId);
 
-	    printf("(W) Writer %d started writing...\n", threadId);
-	    fflush(stdout);
+	    print("(W) Writer %d started writing...\n", threadId);
 
         // Write, write, write
     	usleep(GetRandomTime(800));
 
-    	printf("(W) Writer %d finished\n", threadId);
-        fflush(stdout);
+    	print("(W) Writer %d finished\n", threadId);
 
 	    // Release ownership of the mutex object.
         MUTEX_UNLOCK(result, mutex);
+        dprint("(W) Writer %d unlocked mutex\n", threadId);
     	
         // Think, think, think, think
 	    usleep(GetRandomTime(1000));
     }
+
+    free(data);
 
     return 0;
 }

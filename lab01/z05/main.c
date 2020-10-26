@@ -6,16 +6,15 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-//#define DEBUG
+#define DEBUG
 
 #define READERS_COUNT 5
-#define WRITERS_COUNT 3
+#define WRITERS_COUNT 5 
 #define READER_TURNS 5
 #define WRITER_TURNS 2
-#define write_happened() (writeHappened = 1)
-#define write_handled()  (writeHappened = 0)
-
 #define GetRandomTime(max) (rand() % max + 1)
+
+#define SIZEOF_ARR(arr) (sizeof(arr) / sizeof(arr[0]))
 
 #define MUTEX_LOCK(result_variable, lock) do {      \
     result_variable = pthread_mutex_lock(&lock);    \
@@ -37,6 +36,22 @@
     }                                               \
 } while (0)
 
+#define SEM_POST(sem) do {  \
+    if ( sem_post(&sem) ) { \
+        err(EXIT_FAILURE,   \
+        "Error occured during semaphore unlocking. [ine[%d]]",\
+        __LINE__);          \
+    }                       \
+} while (0)
+
+#define SEM_WAIT(sem) do {  \
+    if ( sem_wait(&sem) ) { \
+        err(EXIT_FAILURE,   \
+        "Error occured during semaphore locking. [ine[%d]]",\
+        __LINE__);          \
+    }                       \
+} while (0)
+
 #define print(...) do {     \
     printf(__VA_ARGS__);    \
     fflush(stdout);         \
@@ -48,20 +63,19 @@
     print(__VA_ARGS__);         \
 } while (0)
 #else
-# define dprint(msg, ...) do {  \
+# define dprint(...) do {  \
 } while (0)
 #endif
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t writeHappenedCond = PTHREAD_COND_INITIALIZER;
-sem_t semaphoreCritic;
-
-volatile int writeHappened = 0;
-volatile int whoWrote = -1;
+int buffers_read_max[] = {2, 3, 2};
+const int buffers_num = SIZEOF_ARR(buffers_read_max);
+pthread_mutex_t mutexesCountUpdate[SIZEOF_ARR(buffers_read_max)];
+pthread_mutex_t mutexesWriters[SIZEOF_ARR(buffers_read_max)];
+sem_t semaphoreReaders[SIZEOF_ARR(buffers_read_max)];
 
 int Writer(void *data);
 int Reader(void *data);
-int Critic(void *data);
 
 int
 main(int argc, char *argv[])
@@ -70,22 +84,14 @@ main(int argc, char *argv[])
     
     pthread_t writerThreads[WRITERS_COUNT];
     pthread_t readerThreads[READERS_COUNT];
-    pthread_t criticThread;
+
+    for (int ii = 0; ii < buffers_num; ii++) {
+        pthread_mutex_init(mutexesCountUpdate + ii, NULL);
+        pthread_mutex_init(mutexesWriters + ii, NULL);
+        sem_init(semaphoreReaders + ii, 0, buffers_read_max[ii]);
+    }
 
     int rc;
-
-    rc = sem_init(&semaphoreCritic, 0, 1);
-
-    // Create Critic thread
-    rc = pthread_create(
-                &criticThread,
-                NULL,
-                (void *) Critic,
-                NULL);
-    if ( rc ) {
-        errno = rc;
-        err(EXIT_FAILURE, "Couldn't create the critic thread");
-    }
 
     // Create Writer threads
     for (int ii = 0; ii < WRITERS_COUNT; ii++) {
@@ -132,8 +138,6 @@ main(int argc, char *argv[])
         pthread_join(writerThreads[ii], NULL);
     }
 
-    pthread_join(criticThread, NULL);
-
     return (0);
 }
 
@@ -142,24 +146,42 @@ Reader(void *data)
 {
     int threadId = *(int*) data;
     int result;
-    
-    for (int ii = 0; ii < READER_TURNS; ii++) {
-        dprint("(R) Reader %d trying to take mutex\n", threadId);
-        MUTEX_LOCK(result, mutex);
-        dprint("(R) Reader %d obtained mutex\n", threadId);
+    int buffer_idx;
 
-        print("(R) Reader %d started reading\n", threadId);
+    for (int ii = 0; ii < READER_TURNS; ii++) {
+        for (;;) {
+            buffer_idx = rand() % buffers_num;
+
+            print("(R) Reader %d trying to lock mutexCU[%d]\n", threadId, buffer_idx);
+            MUTEX_LOCK(result, mutexesCountUpdate[buffer_idx]);
+            print("(R) Reader %d locked mutexCU[%d]\n", threadId, buffer_idx);
+            if ( sem_trywait(semaphoreReaders + buffer_idx) ) {
+                if (errno != EAGAIN) {
+                    err(EXIT_FAILURE,
+                    "Error trying to decrement semaphore. Line[%d]",
+                    __LINE__);
+                }
+            }
+            else {
+                dprint("(R) Reader %d succeded in decrementing semaphoreReaders[%d]\n", threadId, buffer_idx);
+                MUTEX_UNLOCK(result, mutexesCountUpdate[buffer_idx]);
+                print("(R) Reader %d unlocked mutexCU[%d]\n", threadId, buffer_idx);
+                break;
+            }
+        }
+
+        print("(R) Reader %d started reading from object[%d]\n", threadId, buffer_idx);
 
         // Read, read, read
 
 	    usleep(GetRandomTime(200));
-	    print("(R) Reader %d finished reading\n", threadId);
 
-	    // Release ownership of the mutex object.
-        MUTEX_UNLOCK(result, mutex);
-        dprint("(R) Reader %d unlocked mutex\n", threadId);
+	    print("(R) Reader %d finished reading from object[%d]\n", threadId, buffer_idx);
+            
+	    // Unlock the semaphore object.
+	    SEM_POST(semaphoreReaders[buffer_idx]);
+        dprint("(R) Reader %d incremented semaphoreReaders[%d]\n", threadId, buffer_idx);
 
-	    
         usleep(GetRandomTime(800));
     }
 
@@ -172,82 +194,28 @@ int
 Writer(void *data)
 {
     int threadId = *(int*) data;
-    int result;
-
+    int result; 
+    int buffer_idx;
+/*
     for (int ii = 0; ii < WRITER_TURNS; ii++) {
-        dprint("(W) Writer %d waiting for critic semaphore\n", threadId);
-        sem_wait(&semaphoreCritic);
-        dprint("(W) Writer %d trying to take mutex\n", threadId);
-        MUTEX_LOCK(result, mutex);
-        dprint("(W) Writer %d obtained mutex\n", threadId);
-
-	    print("(W) Writer %d started writing...\n", threadId);
+        for (;;) {
+            buffer_idx = rand() % buffers_num;
+            break;
+        }
+	    print("(W) Writer %d started writing to object[%d]\n", threadId, buffer_idx);
 
         // Write, write, write
     	usleep(GetRandomTime(800));
 
-    	print("(W) Writer %d finished writing\n", threadId);
-
-        // Inform critic, that write happened
-        write_happened();
-        whoWrote = threadId;
-        result = pthread_cond_signal(&writeHappenedCond);
-        if ( result ) {
-            errno = result;
-            err(EXIT_FAILURE,
-                "Condition signaling error. Line [%d]",
-                __LINE__);
-        }
-
+    	print("(W) Writer %d finished writing to object[%d]\n", threadId, buffer_idx);
+            
 	    // Release ownership of the mutex object.
-        MUTEX_UNLOCK(result, mutex);
-        dprint("(W) Writer %d unlocked mutex\n", threadId);
     	    
         // Think, think, think, think
 	    usleep(GetRandomTime(1000));
     }
-
+*/
     free(data);
-
-    return (0);
-}
-
-int
-Critic(void *data)
-{
-    int numOfActions = WRITERS_COUNT * WRITER_TURNS;    
-    int result;
-
-    while (numOfActions) {
-        dprint("(C) Critic trying to lock mutex\n");
-        MUTEX_LOCK(result, mutex);
-        dprint("(C) Critic obtained mutex\n");
-
-        while ( !writeHappened ) {
-            dprint("(C) Critic waiting for somebody to write\n");
-            result = pthread_cond_wait(&writeHappenedCond, &mutex);
-            if ( result ) {
-                errno = result;
-                err(EXIT_FAILURE, "Waiting for condition variable error.");
-            }
-        }
-
-        print("(C) Critic started criticising work of Writer %d\n", whoWrote);
-
-        /* Criticise, criticise, criticise */
-        usleep(GetRandomTime(500));
-
-        print("(C) Critic finished criticising\n");
-
-        /* Inform writers, that critic finished */
-        write_handled();
-        numOfActions--;
-        
-        MUTEX_UNLOCK(result, mutex);
-        dprint("(C) Critic unlocked mutex\n");
-        sem_post(&semaphoreCritic);
-        dprint("(C) Critic posted critic semaphore - now Writers can write again.\n");
-    }
 
     return (0);
 }

@@ -5,12 +5,13 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+//#define DEBUG
+
 #define READERS_COUNT 5
 #define WRITERS_COUNT 5
 #define READER_TURNS 5
 #define WRITER_TURNS 2
 #define BUFFER_SIZE 3
-#define BUFFER_EMPTY_INTERVAL 10000
 #define GetRandomTime(max) (rand() % max + 1)
 
 #define MUTEX_LOCK(result_variable, lock) do {      \
@@ -33,6 +34,20 @@
     }                                               \
 } while (0)
 
+#define print(...) do {     \
+    printf(__VA_ARGS__);    \
+    fflush(stdout);         \
+} while (0)
+
+
+#ifdef DEBUG
+# define dprint(...) do {       \
+    print(__VA_ARGS__);         \
+} while (0)
+#else
+# define dprint(msg, ...) do {  \
+} while (0)
+#endif
 
 pthread_mutex_t writerCondLock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t readersCountUpdate = PTHREAD_MUTEX_INITIALIZER;
@@ -116,7 +131,6 @@ main(int argc, char *argv[])
         pthread_join(writerThreads[ii], NULL);
     }
 
-
     pthread_join(bufferedWriterThread, NULL);
 
     return (0);
@@ -136,8 +150,7 @@ Reader(void *data)
         }
         MUTEX_UNLOCK(result, readersCountUpdate);
 
-        printf("(R) Reader %d started reading... reading now %d\n", threadId, readersCount);
-	    fflush(stdout);
+        print("(R) Reader %d started reading... reading now %d\n", threadId, readersCount);
 
         // Read, read, read
         usleep(GetRandomTime(200));
@@ -145,8 +158,7 @@ Reader(void *data)
         MUTEX_LOCK(result, readersCountUpdate);
         readersCount--;
 
-	    printf("(R) Reader %d finished, reading now %d\n", threadId, readersCount);
-        fflush(stdout);
+	    print("(R) Reader %d finished, reading now %d\n", threadId, readersCount);
         if (readersCount == 0) {
             MUTEX_UNLOCK(result, mutex);
         }
@@ -168,11 +180,13 @@ Writer(void *data)
     int result;
 
     for (int ii = 0; ii < WRITER_TURNS; ii++) {
+        dprint("(W) Writer %d trying to lock writerCondLock\n", threadId);
         MUTEX_LOCK(result, writerCondLock);
+        dprint("(W) Writer %d obtained writerCondLock\n", threadId);
 
         // Wait for space in buffer
         while (bufferSpace == 0) {
-            printf("(W) Writer %d started waiting for space\n", threadId);
+            dprint("(W) Writer %d started waiting for space\n", threadId);
             result = pthread_cond_wait(&condWriter, &writerCondLock);
             if (result) {
                 err(EXIT_FAILURE, "Condition wait error. Line[%d]", __LINE__);
@@ -182,21 +196,21 @@ Writer(void *data)
         // Reserve buffer space for a single write
         bufferSpace--;
 
-        printf("(W) Writer %d started writing to buff...\n", threadId);
-        printf("(W) Buffer space left after reserving space: %d\n", bufferSpace);
-        fflush(stdout);
+        print("(W) Writer %d started writing to buff...\n", threadId);
 
         // Write, write, write
         usleep(GetRandomTime(800));
 
-        printf("(W) Writer %d finished writing to buff, buffer space left: %d\n", threadId, bufferSpace);
-        fflush(stdout);
+        print("(W) Writer %d finished writing to buff, buffer space left: %d\n", threadId, bufferSpace);
 
         MUTEX_UNLOCK(result, writerCondLock);
+        dprint("(W) Writer %d unlocked writerCondLock\n", threadId);
 
     	// Think, think, think, think
         usleep(GetRandomTime(1000));
     }
+
+    free(data);
 
     return (0);
 }
@@ -208,11 +222,15 @@ WriterBuffer(void *data)
     int writersToHandle = WRITERS_COUNT * WRITER_TURNS;
 
     while  (writersToHandle) {
+        dprint("(BW) Buffer Writer trying to lock writerCondLock\n");
         MUTEX_LOCK(result, writerCondLock);
-        MUTEX_LOCK(result, mutex);
+        dprint("(BW) Buffer Writer obtained writerCondLock\n");
 
-	    printf("(BW) BufferedWriter started emptying buffer...\n");
-        fflush(stdout);
+        dprint("(BW) Buffer Writer trying to lock mutex\n");
+        MUTEX_LOCK(result, mutex);
+        dprint("(BW) Buffer Writer obtained mutex\n");
+       
+	    print("(BW) BufferedWriter started emptying buffer...\n");
 
         // Write, write, write
         usleep(GetRandomTime((BUFFER_SIZE - bufferSpace + 1) * 500));
@@ -220,13 +238,10 @@ WriterBuffer(void *data)
 
         bufferSpace = BUFFER_SIZE;
 
-        
-
-
-        printf("(BW) BufferedWriter finished, buffer space: %d\n", bufferSpace);
-        fflush(stdout);
+        print("(BW) Buffer Writer finished, buffer space: %d\n", bufferSpace);
 
         MUTEX_UNLOCK(result, mutex);
+        dprint("(BW) Buffer Writer unlocked mutex\n");
 
         result = pthread_cond_signal(&condWriter);
         if (result) {
@@ -235,9 +250,9 @@ WriterBuffer(void *data)
         }
 
         MUTEX_UNLOCK(result, writerCondLock);
+        dprint("(BW) Buffer Writer unlocked writerCondLock\n");
 
-
-        usleep(BUFFER_EMPTY_INTERVAL);
+        usleep(10000);
     }
 
     return (0);

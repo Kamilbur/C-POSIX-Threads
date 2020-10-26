@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+//#define DEBUG
+
 #define READERS_COUNT 5
 #define WRITERS_COUNT 5
 #define READER_TURNS 5
@@ -23,6 +25,20 @@
     }                                               \
 } while (0)
 
+#define print(...) do {     \
+    printf(__VA_ARGS__);    \
+    fflush(stdout);         \
+} while (0)
+
+
+#ifdef DEBUG
+# define dprint(...) do {       \
+    print(__VA_ARGS__);         \
+} while (0)
+#else
+# define dprint(msg, ...) do {  \
+} while (0)
+#endif
 
 pthread_mutex_t mutexes[NUM_OF_SHARED_RESOURCE];
 
@@ -101,6 +117,8 @@ Reader(void *data)
     for (int ii = 0; ii < READER_TURNS; ii++) {
         do {
             shared_resource_idx = rand() % NUM_OF_SHARED_RESOURCE;
+
+            dprint("(R) Reader %d tries to lock mutex[%d]\n", threadId, shared_resource_idx);
             result = pthread_mutex_trylock(mutexes + shared_resource_idx);
             if ( result && result != EBUSY) {
                 errno = result;
@@ -108,18 +126,24 @@ Reader(void *data)
                     "Error during locking the mutex. Line[%d]",
                     __LINE__);
             }
+            if ( result ) {
+                dprint("(R) Reader %d did not succed in locking mutex[%d]\n", threadId, shared_resource_idx); 
+            }
+            else {
+                dprint("(R) Reader %d succeded in locking mutex[%d]\n", threadId, shared_resource_idx); 
+            }
         } while ( result );
         
-        printf("(R) Reader %d started reading from: %d\n", threadId, shared_resource_idx);
-    	fflush(stdout);
+        print("(R) Reader %d started reading from: %d\n", threadId, shared_resource_idx);
 
         // Read, read, read
 
     	usleep(GetRandomTime(200));
-    	printf("(R) Reader %d finished reading from: %d\n", threadId, shared_resource_idx);
-        fflush(stdout);
+    	print("(R) Reader %d finished reading from: %d\n", threadId, shared_resource_idx);
     	// Release ownership of the mutex object.
         MUTEX_UNLOCK(result, mutexes[shared_resource_idx]);
+        dprint("(R) Reader %d unlocked mutex[%d]\n", threadId, shared_resource_idx);
+
         
         usleep(GetRandomTime(800));
     }
@@ -142,6 +166,7 @@ Writer(void *data)
             shared_resource_idx = rand() % NUM_OF_SHARED_RESOURCE;
 
             // Try locking mutex
+            dprint("(W) Writer %d tries to lock mutex[%d]\n", threadId, shared_resource_idx);
             result = pthread_mutex_trylock(mutexes + shared_resource_idx);
             if (result && result != EBUSY) {
                 errno = result;
@@ -149,22 +174,29 @@ Writer(void *data)
                     "Error during locking the mutex. Line[%d]",
                     __LINE__);
             }
+            if ( result ) {
+                dprint("(W) Writer %d did not succed in locking mutex[%d]\n", threadId, shared_resource_idx); 
+            }
+            else {
+                dprint("(W) Writer %d succeded in locking mutex[%d]\n", threadId, shared_resource_idx); 
+            }
         } while ( result );
 
-    	printf("(W) Writer %d started writing to: %d\n", threadId, shared_resource_idx);
-    	fflush(stdout);
+    	print("(W) Writer %d started writing to: %d\n", threadId, shared_resource_idx);
  
         // Write, write, write
         usleep(GetRandomTime(800));
 
-        printf("(W) Writer %d finished writing to: %d\n", threadId, shared_resource_idx);
-        fflush(stdout);
+        print("(W) Writer %d finished writing to: %d\n", threadId, shared_resource_idx);
     	// Release ownership of the mutex object.
         MUTEX_UNLOCK(result, mutexes[shared_resource_idx]);
+        dprint("(W) Writer %d unlocked mutex[%d]\n", threadId, shared_resource_idx);
 
         // Think, think, think, think
 	    usleep(GetRandomTime(1000));
     }
+
+    free(data);
 
     return (0);
 }
