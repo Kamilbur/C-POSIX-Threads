@@ -6,12 +6,12 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#define DEBUG
+//#define DEBUG
 
 #define READERS_COUNT 5
 #define WRITERS_COUNT 5 
-#define READER_TURNS 5
-#define WRITER_TURNS 2
+#define READER_TURNS 3
+#define WRITER_TURNS 3
 #define GetRandomTime(max) (rand() % max + 1)
 
 #define SIZEOF_ARR(arr) (sizeof(arr) / sizeof(arr[0]))
@@ -133,7 +133,7 @@ main(int argc, char *argv[])
         pthread_join(readerThreads[ii], NULL);
     }
 
-    // Wait for the Writer
+    // Wait for the Writers
     for (int ii = 0; ii < WRITERS_COUNT; ii++) {
         pthread_join(writerThreads[ii], NULL);
     }
@@ -166,13 +166,11 @@ Reader(void *data)
                     "Error geting value from semaphore. Line[%d]",
                     __LINE__);
                 }
-                print("(R) Reader %d SR[%d]=%d/%d\n", threadId, buffer_idx, result, buffers_read_max[buffer_idx]);
                 if (result == buffers_read_max[buffer_idx] - 1) {
-                    print("(R) Reader %d decrement SW[%d]\n", threadId, buffer_idx);
                     SEM_WAIT(semaphoreWriters[buffer_idx]);
+                    dprint("(R) Reader %d succeded in decrementing SemaphoreWriters[%d]\n", threadId, buffer_idx);
                 }
                 MUTEX_UNLOCK(result, mutexesCountUpdate[buffer_idx]);
-//                print("(R) Reader %d unlocked mutexCU[%d]\n", threadId, buffer_idx);
                 break;
             }
         }
@@ -212,13 +210,22 @@ int
 Writer(void *data)
 {
     int threadId = *(int*) data;
-    int result; 
     int buffer_idx;
-/*
+    
     for (int ii = 0; ii < WRITER_TURNS; ii++) {
         for (;;) {
-            buffer_idx = rand() % buffers_num;
-            break;
+            buffer_idx = rand() % buffers_num;                        
+            if ( sem_trywait(semaphoreWriters + buffer_idx) ) {
+                if (errno != EAGAIN) {
+                    err(EXIT_FAILURE,
+                    "Error trying to decrement semaphore. Line[%d]",
+                    __LINE__);
+                }
+            }
+            else {
+                dprint("(W) Writer %d succeded in decrementing semaphoreWriters[%d]\n", threadId, buffer_idx);
+                break;
+            }
         }
 	    print("(W) Writer %d started writing to object[%d]\n", threadId, buffer_idx);
 
@@ -227,12 +234,13 @@ Writer(void *data)
 
     	print("(W) Writer %d finished writing to object[%d]\n", threadId, buffer_idx);
             
-	    // Release ownership of the mutex object.
-    	    
+    	SEM_POST(semaphoreWriters[buffer_idx]);
+        dprint("(W) Writer %d posted semaphoreWriters[%d]\n", threadId, buffer_idx);
+
         // Think, think, think, think
 	    usleep(GetRandomTime(1000));
     }
-*/
+
     free(data);
 
     return (0);
