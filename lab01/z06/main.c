@@ -5,11 +5,13 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+//#define DEBUG
+
 #define BUFFER_SIZE 3
-#define READERS_COUNT 5
-#define WRITERS_COUNT 1
-#define READER_TURNS 5
-#define WRITER_TURNS 2
+#define READERS_COUNT 3
+#define WRITERS_COUNT 3
+#define READER_TURNS 3
+#define WRITER_TURNS 3
 #define GetRandomTime(max) (rand() % max + 1)
 
 #define MUTEX_LOCK(result_variable, lock) do {      \
@@ -32,12 +34,30 @@
     }                                               \
 } while (0)
 
+#define print(...) do {     \
+    printf(__VA_ARGS__);    \
+    fflush(stdout);         \
+} while (0)
+
+
+#ifdef DEBUG
+# define dprint(...) do {       \
+    print(__VA_ARGS__);         \
+} while (0)
+#else
+# define dprint(msg, ...) do {  \
+} while (0)
+#endif
+
 pthread_mutex_t mutexWriters = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t condWriters = PTHREAD_COND_INITIALIZER;
 pthread_mutex_t mutexReaders = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t condReaders = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t condReaders = PTHREAD_COND_INITIALIZER;
 
-volatile int buff_place = BUFFER_SIZE;
+volatile int buff_pos_read = BUFFER_SIZE;
+volatile int buff_pos_write = 0;
+volatile int buff_fill = 0;
+volatile int buff_place;
 
 int Writer(void *data);
 int Reader(void *data);
@@ -107,17 +127,55 @@ Reader(void *data)
     int result;
     
     for (int ii = 0; ii < READER_TURNS; ii++) {
-        MUTEX_LOCK(result, mutex);
-        printf("(R) Reader %d started reading...", threadId);
-	    fflush(stdout);
+        dprint("(R) Reader %d trying to lock mutexReaders\n", threadId);
+        MUTEX_LOCK(result, mutexReaders);
+        dprint("(R) Reader %d obtained mutexReaders\n", threadId);
+        while (buff_pos_read >= BUFFER_SIZE) {
+            dprint("(R) Reader %d starting conditional wait\n", threadId);
+            if ( (result = pthread_cond_wait(&condReaders, &mutexReaders)) ) {
+                errno = result;
+                err(EXIT_FAILURE,
+                "Error during conditional wait. Line[%d]",
+                __LINE__);
+            }
+        }
+
+        buff_pos_read++;
+        MUTEX_UNLOCK(result, mutexReaders);
+        dprint("(R) Reader %d unlocked mutexReaders\n", threadId);
+
+
+        print("(R) Reader %d started reading\n", threadId);
 
         // Read, read, read
 
 	    usleep(GetRandomTime(200));
-	    printf("finished\n");
-            
-	    // Release ownership of the mutex object.
-        MUTEX_UNLOCK(result, mutex);
+	    print("(R) Reader %d finished reading\n", threadId);
+
+
+        dprint("(R) Reader %d trying to lock mutexReaders\n", threadId);
+        MUTEX_LOCK(result, mutexReaders);
+        dprint("(R) Reader %d obtained mutexReaders\n", threadId);
+
+        if (++buff_place >= BUFFER_SIZE) {
+            dprint("(R) Reader %d trying to lock mutexWriters\n", threadId);
+            MUTEX_LOCK(result, mutexWriters);
+            dprint("(R) Reader %d obtained mutexWriters\n", threadId);
+
+            buff_pos_write = 0;
+            if ( (result = pthread_cond_broadcast(&condWriters)) ) {
+                errno = result;
+                err(EXIT_FAILURE,
+                "Error during condition broadcast. Line[%d]",
+                __LINE__);
+            }
+            MUTEX_UNLOCK(result, mutexWriters);
+            dprint("(R) Reader %d unlocked mutexWriters\n", threadId);
+
+            buff_place = 0;
+        }
+        MUTEX_UNLOCK(result, mutexReaders);
+        dprint("(R) Reader %d unlocked mutexWriters\n", threadId);
 	    
         usleep(GetRandomTime(800));
     }
@@ -134,25 +192,47 @@ Writer(void *data)
     int result;
     
     for (int ii = 0; ii < WRITER_TURNS; ii++) {
+        dprint("(W) Writer %d trying to lock mutexWriters\n", threadId);
         MUTEX_LOCK(result, mutexWriters);
-        while (buff_place == 0) {
-            if ( result = pthread_cond_wait(mutexWriters, &condWriters) ) {
+        dprint("(W) Writer %d obtained mutexWriters\n", threadId);
+        while (buff_pos_write >= BUFFER_SIZE) {
+            dprint("(W) Writer %d starting conditinal wait\n", threadId);
+            if ( (result = pthread_cond_wait(&condWriters, &mutexWriters)) ) {
                 errno = result;
                 err(EXIT_FAILURE,
                 "Error conditional waiting. Line[%d]",
                 __LINE__);
             }
         }
-        MUTEX_UNLOCK
-	    print("(W) Writer %d started writing...", threadId);
+        // Set new position to write
+        buff_pos_write++;
+        MUTEX_UNLOCK(result, mutexWriters);
+        dprint("(W) Writer %d unlocked mutexWriters\n", threadId);
+
+
+	    print("(W) Writer %d started writing\n", threadId);
         
         // Write, write, write
     	usleep(GetRandomTime(800));
 
-    	printf("finished\n");
+    	print("(W) Writer %d finished writing\n", threadId);
             
-	    // Release ownership of the mutex object.
-        MUTEX_LOCK(result)
+
+        dprint("(W) Writer %d trying to lock mutexWriters\n", threadId);
+        MUTEX_LOCK(result, mutexWriters);
+        dprint("(W) Writer %d obtained mutexWriters\n", threadId);
+        if (++buff_fill >= BUFFER_SIZE) {
+            MUTEX_LOCK(result, mutexReaders);
+            buff_pos_read = 0;
+            if ( (result = pthread_cond_broadcast(&condReaders)) ) {
+                errno = result;
+                err(EXIT_FAILURE,
+                "Error during condition broadcast. Line[%d]",
+                __LINE__);
+            }
+            MUTEX_UNLOCK(result, mutexReaders);
+            buff_fill = 0;
+        }
 
         MUTEX_UNLOCK(result, mutexWriters);
     	    
